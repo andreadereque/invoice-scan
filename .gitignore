@@ -1,0 +1,11 @@
+# Ignorar la carpeta de facturas
+scrips/facturas/
+# Entorno virtual
+venv/
+
+# Archivos de VSCode y macOS
+.DS_Store
+.vscode/
+
+# Archivos de salida
+output/
