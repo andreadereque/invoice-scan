@@ -111,3 +111,107 @@ def procesar_archivo(path):
     campos["fiabilidad"] = fiabilidad
     campos["estado"] = estado
     return campos
+def es_formato_amazon(path):
+    try:
+        text = ocr_from_pdf(path) if path.endswith('.pdf') else ocr_from_image(path)
+        return "Amazon Services Europe" in text and bool(re.search(
+            r"\b(Total|TOTAAL|TOTAL|GESAMT|Łączna)\b", text, re.IGNORECASE
+        ))
+    except:
+        return False
+
+def procesar_amazon_factura(path):
+    text = ocr_from_pdf(path) if path.endswith('.pdf') else ocr_from_image(path)
+
+    # Número de factura o nota de crédito
+    match_n_factura = re.search(
+        r"(?:N[úu]mero de (?:nota de cr[eé]dito|factura)|Factuurnummer|Invoice No\.?|Num[eé]ro de facture|"
+        r"Fattura n[°º]:?|Rechnungsnr|numer faktury)[:\s]*([A-Z0-9\-\/]+)",
+        text, re.IGNORECASE)
+    n_factura = match_n_factura.group(1) if match_n_factura else "NaN"
+
+    # Fecha de emisión
+    match_fecha = re.search(
+        r"(?:Fecha de la factura|Fecha de emisión de la nota de crédito|Factuurdatum|Date de la facture|"
+        r"Data fattura|Rechnungsdatum|data faktury)[:\s]*(\d{2}/\d{2}/\d{4})",
+        text, re.IGNORECASE)
+    fecha = match_fecha.group(1) if match_fecha else "NaN"
+
+    # Capturar todos los valores que podrían ser totales
+    posibles_totales = re.findall(
+        r"(-?\s*(?:EUR|PLN|€)?\s*[\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{2}))", text, re.IGNORECASE)
+
+    total_valor = "NaN"
+    moneda = "NaN"
+
+    if posibles_totales:
+        # Elegimos el total más al final (el último en aparecer)
+        raw_total = posibles_totales[-1]
+        moneda_match = re.search(r"(EUR|PLN|€)", raw_total)
+        moneda = moneda_match.group(1) if moneda_match else "EUR"
+        total_valor = normalizar_numero(raw_total)
+
+
+    return {
+        "archivo": os.path.basename(path),
+        "fecha": fecha,
+        "proveedor": "Amazon Services Europe S.à r.l.",
+        "total": total_valor,
+        "moneda": moneda,
+        "producto": "NaN",
+        "descripcion": "Factura o nota de crédito Amazon",
+        "n_factura": n_factura,
+        "fiabilidad": 1.0,
+        "estado": "OK"
+    }
+def normalizar_numero(texto):
+    texto = texto.strip().replace("−", "-")
+    texto = texto.replace(" ", "").replace("€", "").replace("EUR", "").replace("PLN", "")
+
+    if "." in texto and "," in texto:
+        # 1.234,56 → 1234.56
+        texto = texto.replace(".", "").replace(",", ".")
+    elif "," in texto and not "." in texto:
+        # 123,45 → 123.45
+        texto = texto.replace(",", ".")
+    # else: 1234.56 → se queda igual
+
+    try:
+        return round(float(texto), 2)
+    except:
+        return "NaN"
+def es_formato_openai(path):
+    try:
+        text = ocr_from_pdf(path) if path.endswith('.pdf') else ocr_from_image(path)
+        return "OpenAI" in text and "ChatGPT Plus" in text
+    except:
+        return False
+
+def procesar_openai_factura(path):
+    text = ocr_from_pdf(path) if path.endswith('.pdf') else ocr_from_image(path)
+
+    # Número de factura
+    match_n_factura = re.search(r"Invoice number[:\s]*([A-Z0-9\-]+)", text, re.IGNORECASE)
+    n_factura = match_n_factura.group(1) if match_n_factura else "NaN"
+
+    # Fecha de emisión
+    match_fecha = re.search(r"Date of issue[:\s]*(\w+\s\d{1,2},\s\d{4})", text, re.IGNORECASE)
+    fecha = match_fecha.group(1) if match_fecha else "NaN"
+
+    # Total
+    match_total = re.search(r"Total[:\s]*\$([\d.,]+)", text)
+    total_valor = normalizar_numero(match_total.group(1)) if match_total else "NaN"
+    moneda = "USD"
+
+    return {
+        "archivo": os.path.basename(path),
+        "fecha": fecha,
+        "proveedor": "OpenAI, LLC",
+        "total": total_valor,
+        "moneda": moneda,
+        "producto": "ChatGPT Plus",
+        "descripcion": "Suscripción mensual",
+        "n_factura": n_factura,
+        "fiabilidad": 1.0,
+        "estado": "OK"
+    }
