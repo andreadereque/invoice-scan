@@ -6,11 +6,13 @@ from pdf2image import convert_from_path
 import re
 import os
 
+# OCR para imágenes
 def ocr_from_image(path):
     image = Image.open(path)
-    text = pytesseract.image_to_string(image, lang='spa+fra+eng+deu+nld+swe')
+    text = pytesseract.image_to_string(image, lang='spa+fra+eng+deu+nld+swe+ita+por')
     return text
 
+# OCR para PDFs con OCR complementario
 def ocr_from_pdf(path):
     text = ""
     with pdfplumber.open(path) as pdf:
@@ -18,12 +20,35 @@ def ocr_from_pdf(path):
             page_text = page.extract_text()
             if page_text:
                 text += page_text + "\n"
-    if not text.strip():
-        images = convert_from_path(path)
-        for image in images:
-            text += pytesseract.image_to_string(image, lang='spa+fra+eng+deu+nld+swe') + "\n"
+
+    # OCR adicional siempre (por si falta texto)
+    images = convert_from_path(path)
+    for image in images:
+        text += pytesseract.image_to_string(image, lang='spa+fra+eng+deu+nld+swe+ita+por') + "\n"
+
     return text
 
+# Normalizar números monetarios
+def normalizar_numero(texto):
+    if texto is None:
+        return None
+    if not isinstance(texto, str):
+        texto = str(texto)
+
+    texto = texto.strip().replace("−", "-")
+    texto = texto.replace(" ", "").replace("€", "").replace("EUR", "").replace("PLN", "").replace("USD", "")
+
+    if "." in texto and "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    elif "," in texto:
+        texto = texto.replace(",", ".")
+
+    try:
+        return round(float(texto), 2)
+    except:
+        return None
+
+# Extraer campos principales
 def extract_fields(text):
     def match(patterns, multiple=False):
         matches = []
@@ -40,8 +65,7 @@ def extract_fields(text):
         "fecha": [
             r"\d{2}[/-]\d{2}[/-]\d{4}", r"\d{2}[.\-]\d{2}[.\-]\d{2,4}",
             r"\d{1,2}\s+(de\s+)?[a-zA-Z]+\s+\d{4}", r"[A-Z][a-z]+\s\d{1,2},\s\d{4}",
-            r"DATA FACTURA[:\s]*(\d{2}/\d{2}/\d{2,4})",  # catalán
-            r"Date[:\s]*(\d{4}[./-]\d{2}[./-]\d{2})"      # inglés (2024.02.22)
+            r"DATA FACTURA[:\s]*(\d{2}/\d{2}/\d{2,4})", r"Date[:\s]*(\d{4}[./-]\d{2}[./-]\d{2})"
         ],
         "proveedor": [
             r"NOM FISCAL[:\s]*(.+)", r"(?i)Nombre del proveedor[:\s]*(.+)",
@@ -52,7 +76,9 @@ def extract_fields(text):
             r"TOTAL FACTURA[:\s]*([\d.,]+)", r"(?i)Total[:\s€$]*([\-\d.,]+)",
             r"(?i)Importe Total[:\s€$]*([\-\d.,]+)", r"(?i)Amount Due[:\s€$]*([\-\d.,]+)",
             r"(?i)Grand Total[:\s€$]*([\-\d.,]+)", r"\$([\d.,]+)\s*(USD)?",
-            r"Amount\s*\(USD\)[\s:]*\$?([\d.,]+)",
+            r"Amount\s*\(USD\)[\s:]*\$?([\d.,]+)", r"Gesamtbetrag[:\s]*([\d.,\-]+)",
+            r"Importo\s*totale[:\s]*([\d.,\-]+)", r"Totaalbedrag[:\s]*([\d.,\-]+)",
+            r"Montant\s*total[:\s]*([\d.,\-]+)"
         ],
         "producto": [
             r"(?i)(ALTAVOZ|CASCO|AURICULARES|PIZARRA|BUFFET|COCACOLA|DETOX|CHAMP[ÚU]|SUSHI|ZAPATILLA|CAMISETA|LÁMPARA).*"
@@ -65,22 +91,87 @@ def extract_fields(text):
         "n_factura": [
             r"(?i)Factura[\s\-:]*[Nnº]*[:\s]*([\w\-\/]+)", r"(?i)NUMERO FACTURA[:\s]*([A-Z0-9\-\/]+)",
             r"(?i)Invoice (No\.?|number)?[:\s]*([A-Z0-9\-\/]+)", r"Nº[:\s]*([\w\-\/]+)",
-            r"(?i)Reference[:\s]*([\w\-\/]+)", r"(?i)Rechnungsnummer[:\s]*([\w\-\/]+)"
+            r"(?i)Reference[:\s]*([\w\-\/]+)", r"(?i)Rechnungsnummer[:\s]*([\w\-\/]+)",
+            r"(?i)Fattura\s*n[oº]?[.:\s]*([A-Z0-9\-\/]+)", r"(?i)Factuur\s*nr[:.\s]*([A-Z0-9\-\/]+)"
         ]
     }
 
     campos = {campo: match(pats) for campo, pats in patterns.items()}
 
+    # Reintento total: por líneas clave
     if campos["total"] == "NaN":
-        posibles_totales = match(patterns["total"], multiple=True)
-        if posibles_totales:
+        for line in text.splitlines():
+            if re.search(r"(total|importe|amount due|totaal|montant|gesamt)", line, re.IGNORECASE):
+                posibles = re.findall(r"[\-]?\d+[.,]\d{2}", line)
+                if posibles:
+                    campos["total"] = posibles[-1]
+                    break
+
+    campos["total"] = normalizar_numero(campos["total"]) if campos["total"] != "NaN" else "NaN"
+    return campos
+
+# Fiabilidad
+
+def calcular_fiabilidad(campos):
+    encontrados = sum(1 for v in campos.values() if v != "NaN")
+    return round(encontrados / len(campos), 2)
+
+# Estado
+
+def determinar_estado(fiabilidad, campos):
+    vacios = sum(1 for v in campos.values() if v == "NaN")
+    return "Revisión manual" if fiabilidad < 0.6 or vacios >= 2 else "OK"
+
+# Procesamiento total
+
+def procesar_archivo(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ['.jpg', '.jpeg', '.png']:
+        text = ocr_from_image(path)
+    elif ext == '.pdf':
+        text = ocr_from_pdf(path)
+    else:
+        return None
+
+    campos = extract_fields(text)
+
+    # Relleno adicional
+    if campos["n_factura"] == "NaN":
+        match = re.search(r"Invoice No[:\s]*([A-Z0-9\-]+)", text, re.IGNORECASE)
+        if match:
+            campos["n_factura"] = match.group(1)
+
+    if campos["fecha"] == "NaN":
+        match = re.search(r"Date[:\s]*(\d{4}[./-]\d{2}[./-]\d{2})", text, re.IGNORECASE)
+        if match:
+            campos["fecha"] = match.group(1)
+
+    if campos["total"] == "NaN":
+        posibles = re.findall(r"\$([\d.,]+)", text)
+        if posibles:
             try:
                 convert = lambda x: float(x.replace(',', '').replace('.', '.', 1))
-                campos["total"] = max(posibles_totales, key=convert)
+                campos["total"] = max(posibles, key=convert)
             except:
                 pass
 
+    if campos["proveedor"] == "NaN" and "Shantou Shuoyin Technology" in text:
+        campos["proveedor"] = "Shantou Shuoyin Technology Co., Ltd"
+
+    fiabilidad = calcular_fiabilidad(campos)
+    estado = determinar_estado(fiabilidad, campos)
+    campos.update({
+        "archivo": os.path.basename(path),
+        "fiabilidad": fiabilidad,
+        "estado": estado
+    })
+
+    if campos["total"] == "NaN" or campos["n_factura"] == "NaN":
+        with open("errores.txt", "a") as f:
+            f.write(f"{os.path.basename(path)}\n")
+
     return campos
+
 
 
 def calcular_fiabilidad(campos):
