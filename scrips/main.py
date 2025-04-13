@@ -1,7 +1,16 @@
 import os
 import pandas as pd
 from tqdm import tqdm
-from extractor import procesar_amazon_factura, procesar_openai_factura, procesar_archivo, es_formato_amazon, es_formato_openai
+from extractor import (
+    procesar_amazon_factura,
+    procesar_openai_factura,
+    procesar_alibaba_factura,
+    procesar_archivo,
+    es_formato_amazon,
+    es_formato_openai,
+    es_formato_alibaba,
+    normalizar_numero  # importante importar esta función también
+)
 
 # Ruta a la carpeta que contiene las facturas
 RUTA_FACTURAS = "scrips/facturas"
@@ -15,10 +24,13 @@ print(f"🔍 Procesando {total_archivos} archivos...")
 
 for archivo in tqdm(archivos, desc="📄 Facturas"):
     ruta_completa = os.path.join(RUTA_FACTURAS, archivo)
+
     if es_formato_amazon(ruta_completa):
         resultado = procesar_amazon_factura(ruta_completa)
     elif es_formato_openai(ruta_completa):
         resultado = procesar_openai_factura(ruta_completa)
+    elif es_formato_alibaba(ruta_completa):
+        resultado = procesar_alibaba_factura(ruta_completa)
     else:
         resultado = procesar_archivo(ruta_completa)
 
@@ -29,14 +41,8 @@ for archivo in tqdm(archivos, desc="📄 Facturas"):
 if resultados:
     df = pd.DataFrame(resultados)
 
-    # Convertir 'total' a float
-    def safe_float(x):
-        try:
-            return float(x)
-        except:
-            return None
-
-    df["total"] = df["total"].apply(safe_float)
+    # Normalizar 'total' a float usando función robusta
+    df["total"] = df["total"].apply(normalizar_numero)
 
     # Guardar Excel
     os.makedirs("output", exist_ok=True)

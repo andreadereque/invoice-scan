@@ -39,39 +39,33 @@ def extract_fields(text):
     patterns = {
         "fecha": [
             r"\d{2}[/-]\d{2}[/-]\d{4}", r"\d{2}[.\-]\d{2}[.\-]\d{2,4}",
-            r"\d{1,2}\s+(de\s+)?[a-zA-Z]+\s+\d{4}", r"[A-Z][a-z]+\s\d{1,2},\s\d{4}"
+            r"\d{1,2}\s+(de\s+)?[a-zA-Z]+\s+\d{4}", r"[A-Z][a-z]+\s\d{1,2},\s\d{4}",
+            r"DATA FACTURA[:\s]*(\d{2}/\d{2}/\d{2,4})",  # catalán
+            r"Date[:\s]*(\d{4}[./-]\d{2}[./-]\d{2})"      # inglés (2024.02.22)
         ],
         "proveedor": [
+            r"NOM FISCAL[:\s]*(.+)", r"(?i)Nombre del proveedor[:\s]*(.+)",
             r"(?i)Vendido por[:\s]*(.+)", r"(?i)Sold By[:\s]*(.+)",
-            r"(?i)Nombre del proveedor[:\s]*(.+)", r"(?i)Proveedor[:\s]*(.+)",
-            r"(?i)Nom du fournisseur[:\s]*(.+)", r"(?i)Client[:\s]*(.+)",
-            r"(?i)Bill(?:ed)? to[:\s]*(.+)",
-            r"(?i)Dienstverlener[:\s]*(.+)", r"(?i)Zakelijk adres[:\s]*(.+)",
-            r"(?i)Leverant[öo]r[:\s]*(.+)", r"(?i)F[öo]retagsnamn[:\s]*(.+)"
+            r"(?i)Proveedor[:\s]*(.+)", r"(?i)Client[:\s]*(.+)"
         ],
         "total": [
-            r"(?i)Total factura[:\s€]*([\-\d.,]+)", r"(?i)Amount Due[:\s€]*([\-\d.,]+)",
-            r"(?i)Total[:\s€]*([\-\d.,]+)", r"(?i)Importe Total[:\s€]*([\-\d.,]+)",
-            r"(?i)Total Due[:\s€]*([\-\d.,]+)", r"(?i)Grand Total[:\s€]*([\-\d.,]+)",
-            r"(?i)VAT Total[:\s€]*([\-\d.,]+)", r"(?i)Amount Paid[:\s€]*([\-\d.,]+)",
-            r"([\-\d]{1,3}(?:[.,][\-\d]{3})*[.,][\-\d]{2})\s*(EUR|€)?"
+            r"TOTAL FACTURA[:\s]*([\d.,]+)", r"(?i)Total[:\s€$]*([\-\d.,]+)",
+            r"(?i)Importe Total[:\s€$]*([\-\d.,]+)", r"(?i)Amount Due[:\s€$]*([\-\d.,]+)",
+            r"(?i)Grand Total[:\s€$]*([\-\d.,]+)", r"\$([\d.,]+)\s*(USD)?",
+            r"Amount\s*\(USD\)[\s:]*\$?([\d.,]+)",
         ],
         "producto": [
             r"(?i)(ALTAVOZ|CASCO|AURICULARES|PIZARRA|BUFFET|COCACOLA|DETOX|CHAMP[ÚU]|SUSHI|ZAPATILLA|CAMISETA|LÁMPARA).*"
         ],
         "descripcion": [
-            r"(?i)Descripción[:\s]*(.+)", r"(?i)Motif[:\s]*(.+)", r"(?i)Item[:\s]*(.+)",
-            r"(?i)Remboursement frais", r"(?i)Omschrijving[:\s]*(.+)",
+            r"(?i)Descripción[:\s]*(.+)", r"(?i)CONCEPTE\s*(.*?)\n",
+            r"(?i)Motif[:\s]*(.+)", r"(?i)Item[:\s]*(.+)", r"(?i)Servei.*?[\n:]",
             r"(?i)(Comisión.*?|Detox.*?|Auriculares.*?|Sushi.*?|Capsulas.*?)\n"
         ],
         "n_factura": [
-            r"(?i)Factura[\s\-:]*[Nnº]*[:\s]*([\w\-\/]+)",
-            r"(?i)Invoice (No\.?|number)?[:\s]*([\w\-\/]+)",
-            r"(?i)Número nota de crédito[:\s]*([\w\-\/]+)",
-            r"(?i)Num[eé]ro de note de cr[eé]dit[:\s]*([\w\-\/]+)",
-            r"(?i)Nº[:\s]*([\w\-\/]+)", r"(?i)Reference[:\s]*([\w\-\/]+)",
-            r"(?i)Ref\.?[:\s]*([\w\-\/]+)", r"(?i)Rechnungsnummer[:\s]*([\w\-\/]+)",
-            r"(?i)Fakturanummer[:\s]*([\w\-\/]+)"
+            r"(?i)Factura[\s\-:]*[Nnº]*[:\s]*([\w\-\/]+)", r"(?i)NUMERO FACTURA[:\s]*([A-Z0-9\-\/]+)",
+            r"(?i)Invoice (No\.?|number)?[:\s]*([A-Z0-9\-\/]+)", r"Nº[:\s]*([\w\-\/]+)",
+            r"(?i)Reference[:\s]*([\w\-\/]+)", r"(?i)Rechnungsnummer[:\s]*([\w\-\/]+)"
         ]
     }
 
@@ -81,12 +75,13 @@ def extract_fields(text):
         posibles_totales = match(patterns["total"], multiple=True)
         if posibles_totales:
             try:
-                convert = lambda x: float(x.replace('.', '').replace(',', '.').replace('−', '-'))
+                convert = lambda x: float(x.replace(',', '').replace('.', '.', 1))
                 campos["total"] = max(posibles_totales, key=convert)
             except:
                 pass
 
     return campos
+
 
 def calcular_fiabilidad(campos):
     encontrados = sum(1 for v in campos.values() if v != "NaN")
@@ -105,6 +100,35 @@ def procesar_archivo(path):
     else:
         return None
     campos = extract_fields(text)
+   # Segunda pasada para completar campos vacíos
+
+    # n_factura adicional
+    if campos["n_factura"] == "NaN":
+        match = re.search(r"Invoice No[:\s]*([A-Z0-9\-]+)", text, re.IGNORECASE)
+        if match:
+            campos["n_factura"] = match.group(1)
+
+    # fecha adicional
+    if campos["fecha"] == "NaN":
+        match = re.search(r"Date[:\s]*(\d{4}[./-]\d{2}[./-]\d{2})", text, re.IGNORECASE)
+        if match:
+            campos["fecha"] = match.group(1)
+
+    # total adicional (último valor en USD o monto mayor en dólares)
+    if campos["total"] == "NaN":
+        posibles = re.findall(r"\$([\d.,]+)", text)
+        if posibles:
+            try:
+                convert = lambda x: float(x.replace(',', '').replace('.', '.', 1))
+                campos["total"] = max(posibles, key=convert)
+            except:
+                pass
+
+    # proveedor adicional
+    if campos["proveedor"] == "NaN" and "Shantou Shuoyin Technology" in text:
+        campos["proveedor"] = "Shantou Shuoyin Technology Co., Ltd"
+
+
     fiabilidad = calcular_fiabilidad(campos)
     estado = determinar_estado(fiabilidad, campos)
     campos["archivo"] = os.path.basename(path)
@@ -165,21 +189,24 @@ def procesar_amazon_factura(path):
         "estado": "OK"
     }
 def normalizar_numero(texto):
+    if texto is None:
+        return None
+    if not isinstance(texto, str):
+        texto = str(texto)
+
     texto = texto.strip().replace("−", "-")
-    texto = texto.replace(" ", "").replace("€", "").replace("EUR", "").replace("PLN", "")
+    texto = texto.replace(" ", "").replace("€", "").replace("EUR", "").replace("PLN", "").replace("USD", "")
 
     if "." in texto and "," in texto:
-        # 1.234,56 → 1234.56
         texto = texto.replace(".", "").replace(",", ".")
     elif "," in texto and not "." in texto:
-        # 123,45 → 123.45
         texto = texto.replace(",", ".")
-    # else: 1234.56 → se queda igual
-
+    
     try:
         return round(float(texto), 2)
     except:
-        return "NaN"
+        return None
+
 def es_formato_openai(path):
     try:
         text = ocr_from_pdf(path) if path.endswith('.pdf') else ocr_from_image(path)
@@ -215,3 +242,38 @@ def procesar_openai_factura(path):
         "fiabilidad": 1.0,
         "estado": "OK"
     }
+def es_formato_alibaba(path):
+    try:
+        text = ocr_from_pdf(path) if path.endswith('.pdf') else ocr_from_image(path)
+        return "Alibaba.com Singapore E-Commerce" in text and "Invoice No." in text
+    except:
+        return False
+def procesar_alibaba_factura(path):
+    text = ocr_from_pdf(path) if path.endswith('.pdf') else ocr_from_image(path)
+
+    # Número de factura
+    match_n_factura = re.search(r"Invoice No\.?\s*[:：]?\s*([A-Z0-9_\-/]+)", text, re.IGNORECASE)
+    n_factura = match_n_factura.group(1) if match_n_factura else "NaN"
+
+    # Fecha
+    match_fecha = re.search(r"Invoice Date\s*[:：]?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})", text)
+    fecha = match_fecha.group(1) if match_fecha else "NaN"
+
+    # Total
+    match_total = re.search(r"Amount\s*Due\s*[:：]?\s*([\d.,]+)\s*USD", text)
+    total_valor = normalizar_numero(match_total.group(1)) if match_total else "NaN"
+    moneda = "USD"
+
+    return {
+        "archivo": os.path.basename(path),
+        "fecha": fecha,
+        "proveedor": "Alibaba.com Singapore E-Commerce Private Ltd.",
+        "total": total_valor,
+        "moneda": moneda,
+        "producto": "NaN",
+        "descripcion": "Servicio Alibaba",
+        "n_factura": n_factura,
+        "fiabilidad": 1.0,
+        "estado": "OK"
+    }
+
