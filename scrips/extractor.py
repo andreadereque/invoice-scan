@@ -1,4 +1,3 @@
-# extractor.py
 import pytesseract
 from PIL import Image
 import pdfplumber
@@ -21,7 +20,6 @@ def ocr_from_pdf(path):
             if page_text:
                 text += page_text + "\n"
 
-    # OCR adicional siempre (por si falta texto)
     images = convert_from_path(path)
     for image in images:
         text += pytesseract.image_to_string(image, lang='spa+fra+eng+deu+nld+swe+ita+por') + "\n"
@@ -92,13 +90,14 @@ def extract_fields(text):
             r"(?i)Factura[\s\-:]*[Nnº]*[:\s]*([\w\-\/]+)", r"(?i)NUMERO FACTURA[:\s]*([A-Z0-9\-\/]+)",
             r"(?i)Invoice (No\.?|number)?[:\s]*([A-Z0-9\-\/]+)", r"Nº[:\s]*([\w\-\/]+)",
             r"(?i)Reference[:\s]*([\w\-\/]+)", r"(?i)Rechnungsnummer[:\s]*([\w\-\/]+)",
-            r"(?i)Fattura\s*n[oº]?[.:\s]*([A-Z0-9\-\/]+)", r"(?i)Factuur\s*nr[:.\s]*([A-Z0-9\-\/]+)"
+            r"(?i)Fattura\s*n[oº]?[.:\s]*([A-Z0-9\-\/]+)", r"(?i)Factuur\s*nr[:.\s]*([A-Z0-9\-\/]+)",
+            r"(?i)Order ID[:\s]*([A-Z0-9\-\/]+)", r"(?i)Order Number[:\s]*([A-Z0-9\-\/]+)",
+            r"(?i)Transaction ID[:\s]*([A-Z0-9\-\/]+)"
         ]
     }
 
     campos = {campo: match(pats) for campo, pats in patterns.items()}
 
-    # Reintento total: por líneas clave
     if campos["total"] == "NaN":
         for line in text.splitlines():
             if re.search(r"(total|importe|amount due|totaal|montant|gesamt)", line, re.IGNORECASE):
@@ -107,22 +106,35 @@ def extract_fields(text):
                     campos["total"] = posibles[-1]
                     break
 
+    if campos["total"] == "NaN":
+        numeros = re.findall(r"[\-]?\d+[.,]\d{2}", text)
+        posibles_totales = [normalizar_numero(n) for n in numeros]
+        if posibles_totales:
+            campos["total"] = max([x for x in posibles_totales if x is not None], default="NaN")
+
+    if campos["n_factura"] == "NaN":
+        match = re.search(r"\b\d{15,}\b", text)
+        if match:
+            campos["n_factura"] = match.group(0)
+
+    if campos["proveedor"] == "NaN":
+        if "Amazon" in text:
+            campos["proveedor"] = "Amazon Services Europe S.à r.l."
+        elif "Alibaba" in text:
+            campos["proveedor"] = "Alibaba.com Singapore E-Commerce Private Ltd."
+        elif "Temu" in text:
+            campos["proveedor"] = "Whaleco Technology Limited"
+
     campos["total"] = normalizar_numero(campos["total"]) if campos["total"] != "NaN" else "NaN"
     return campos
-
-# Fiabilidad
 
 def calcular_fiabilidad(campos):
     encontrados = sum(1 for v in campos.values() if v != "NaN")
     return round(encontrados / len(campos), 2)
 
-# Estado
-
 def determinar_estado(fiabilidad, campos):
     vacios = sum(1 for v in campos.values() if v == "NaN")
     return "Revisión manual" if fiabilidad < 0.6 or vacios >= 2 else "OK"
-
-# Procesamiento total
 
 def procesar_archivo(path):
     ext = os.path.splitext(path)[1].lower()
@@ -135,29 +147,6 @@ def procesar_archivo(path):
 
     campos = extract_fields(text)
 
-    # Relleno adicional
-    if campos["n_factura"] == "NaN":
-        match = re.search(r"Invoice No[:\s]*([A-Z0-9\-]+)", text, re.IGNORECASE)
-        if match:
-            campos["n_factura"] = match.group(1)
-
-    if campos["fecha"] == "NaN":
-        match = re.search(r"Date[:\s]*(\d{4}[./-]\d{2}[./-]\d{2})", text, re.IGNORECASE)
-        if match:
-            campos["fecha"] = match.group(1)
-
-    if campos["total"] == "NaN":
-        posibles = re.findall(r"\$([\d.,]+)", text)
-        if posibles:
-            try:
-                convert = lambda x: float(x.replace(',', '').replace('.', '.', 1))
-                campos["total"] = max(posibles, key=convert)
-            except:
-                pass
-
-    if campos["proveedor"] == "NaN" and "Shantou Shuoyin Technology" in text:
-        campos["proveedor"] = "Shantou Shuoyin Technology Co., Ltd"
-
     fiabilidad = calcular_fiabilidad(campos)
     estado = determinar_estado(fiabilidad, campos)
     campos.update({
@@ -165,10 +154,6 @@ def procesar_archivo(path):
         "fiabilidad": fiabilidad,
         "estado": estado
     })
-
-    if campos["total"] == "NaN" or campos["n_factura"] == "NaN":
-        with open("errores.txt", "a") as f:
-            f.write(f"{os.path.basename(path)}\n")
 
     return campos
 
