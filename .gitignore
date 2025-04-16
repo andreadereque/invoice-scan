@@ -1,5 +1,7 @@
 # Ignorar la carpeta de facturas
 scrips/facturas/
+data/
+output/
 # Entorno virtual
 venv/
 
@@ -9,3 +11,5 @@ venv/
 
 # Archivos de salida
 output/
+
+
