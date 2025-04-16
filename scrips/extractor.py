@@ -98,6 +98,7 @@ def extract_fields(text):
 
     campos = {campo: match(pats) for campo, pats in patterns.items()}
 
+    # Fallback: buscar por líneas clave
     if campos["total"] == "NaN":
         for line in text.splitlines():
             if re.search(r"(total|importe|amount due|totaal|montant|gesamt)", line, re.IGNORECASE):
@@ -106,17 +107,20 @@ def extract_fields(text):
                     campos["total"] = posibles[-1]
                     break
 
+    # Fallback: elegir número más alto con formato monetario
     if campos["total"] == "NaN":
         numeros = re.findall(r"[\-]?\d+[.,]\d{2}", text)
         posibles_totales = [normalizar_numero(n) for n in numeros]
         if posibles_totales:
             campos["total"] = max([x for x in posibles_totales if x is not None], default="NaN")
 
+    # Fallback: si es número largo, usarlo como n_factura
     if campos["n_factura"] == "NaN":
         match = re.search(r"\b\d{15,}\b", text)
         if match:
             campos["n_factura"] = match.group(0)
 
+    # Corrección proveedor por contexto
     if campos["proveedor"] == "NaN":
         if "Amazon" in text:
             campos["proveedor"] = "Amazon Services Europe S.à r.l."
@@ -127,6 +131,7 @@ def extract_fields(text):
 
     campos["total"] = normalizar_numero(campos["total"]) if campos["total"] != "NaN" else "NaN"
     return campos
+
 
 def calcular_fiabilidad(campos):
     encontrados = sum(1 for v in campos.values() if v != "NaN")
